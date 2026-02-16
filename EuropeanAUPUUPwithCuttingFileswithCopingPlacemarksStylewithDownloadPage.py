@@ -9,8 +9,8 @@ import time
 
 # --- ПАРАМЕТРЫ ---
 HTML_FILE = "AUP_UUP Details.htm"
-INPUT_KML = "00 - TOTAL ÁREAS FUA 2026.kml"
-OUTPUT_KML = "ACTIVE_REGIONS.kml"
+INPUT_KML = "Data Base.kml"
+OUTPUT_KML = "Active Regions.kml"
 KML_NS = 'http://www.opengis.net/kml/2.2' # Правильное пространство имен для GEpro KML 2.2
 FULL_COPY = ["SUPLEMENTOS ACTIVIDADES", "ESPAÇO AÉREO", "AERODROMOS E CAMPOS VOO"]  # Эти папки полетят в файл целиком
 
@@ -209,3 +209,4 @@ if __name__ == "__main__":
         print(f"Сохранено в {OUTPUT_KML}.")
     else:
         print("Регионы для обновления не найдены, KML не создан.")
+
