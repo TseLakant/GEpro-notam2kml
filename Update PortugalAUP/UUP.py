@@ -2,7 +2,6 @@ import os
 from lxml import etree
 from bs4 import BeautifulSoup
 import re
-import io
 from playwright.sync_api import sync_playwright
 import time
 
@@ -209,4 +208,5 @@ if __name__ == "__main__":
         print(f"Сохранено в {OUTPUT_KML}.")
     else:
         print("Регионы для обновления не найдены, KML не создан.")
+
 
