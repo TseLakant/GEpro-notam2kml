@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import re
 from playwright.sync_api import sync_playwright
 import time
+import sys
 
 
 # --- ПАРАМЕТРЫ ---
@@ -16,7 +17,7 @@ FULL_COPY = ["SUPLEMENTOS ACTIVIDADES", "ESPAÇO AÉREO", "AERODROMOS E CAMPOS V
 
 def download_page():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context()
         page = context.new_page()
 
@@ -176,7 +177,7 @@ def parse_eaup_htm(file_path):
                 elif val.isdigit() and int(val) < 245:
                     val = f"{int(val) * 100} ft"
                 elif val.isdigit() and int(val) >= 245:
-                    val = 'FL245'
+                    val = f'FL{val}'
                 altitudes.append(val)
             clean_alts = altitudes[:2]
             alt_display = '/'.join(clean_alts) if clean_alts else "не указаны"
@@ -194,18 +195,24 @@ def parse_eaup_htm(file_path):
 
 
 if __name__ == "__main__":
-    download_page()
-    print(f"Запуск парсинга {HTML_FILE}...")
     try:
-        lp_regions = parse_eaup_htm(HTML_FILE)
-    except FileNotFoundError:
-        print(f"Файл {HTML_FILE} не найден")
-        exit(1)
+        download_page()
+        print(f"Запуск парсинга {HTML_FILE}...")
+        try:
+            lp_regions = parse_eaup_htm(HTML_FILE)
+        except FileNotFoundError:
+            print(f"Файл {HTML_FILE} не найден")
+            exit(1)
 
-    if lp_regions:
-        print(f"Найдено {len(lp_regions)} активных регионов в HTML-данных.")
-        process_ge_pro_kml(INPUT_KML, OUTPUT_KML, FULL_COPY, lp_regions)
-        print(f"Сохранено в {OUTPUT_KML}.")
-    else:
-        print("Регионы для обновления не найдены, KML не создан.")
+        if lp_regions:
+            print(f"Найдено {len(lp_regions)} активных регионов в HTML-данных.")
+            process_ge_pro_kml(INPUT_KML, OUTPUT_KML, FULL_COPY, lp_regions)
+            print(f"Сохранено в {OUTPUT_KML}.")
+        else:
+            print("Регионы для обновления не найдены, KML не создан.")
+        print("\nПрограмма завершила ошибку без ошибок")
+    except Exception as e:
+        print(f"\nПроизошла ошибка: {e}")
+    finally:
+        input("\nНажмите Enter, чтобы закрыть окно...")
 
