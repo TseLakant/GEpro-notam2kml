@@ -3,4 +3,4 @@ supported features:
   full coping folders and placemarks styles;
   automatic downloading European AUP/UUP database
 
-libraries required for file to work: bs4, lxml, playwright, re, os, time
+libraries required for .py file to work: bs4, lxml, playwright
