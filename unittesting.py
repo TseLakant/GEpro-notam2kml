@@ -15,10 +15,61 @@ if current_dir not in sys.path:
 try:
     from mirror_1 import parse_eaup_htm
     from mirror_1 import process_ge_pro_kml
+    from mirror_1 import load_config
+    from mirror_1 import download_page
 except ImportError:
     print("\n❌ ОШИБКА: Не удалось найти файл 'main.py'.")
     print(f"Убедитесь, что ваш скрипт переименован в 'main.py' и лежит здесь: {current_dir}")
     sys.exit(1)
+
+
+class TestConfigLoader(unittest.TestCase):
+    def setUp(self):
+        self.config_file = "config.json"
+        self.default_data = {
+            "URL": "https://example.com",
+            "HTML_FILE": "test.htm",
+            "BAN_WORDS": ["TEST"]
+        }
+
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("json.dump")
+    def test_load_config_creates_default_if_missing(self, mock_json_dump, mock_file, mock_exists):
+        """Тест: Если файла нет, он должен создаться с дефолтными значениями"""
+        mock_exists.return_value = False
+
+        # Вызываем вашу функцию (замените на реальное имя, если оно другое)
+        from mirror_1 import load_config
+        config = load_config()
+
+        # Проверяем, что json.dump был вызван для записи дефолтов
+        mock_json_dump.assert_called()
+        self.assertIn("KML_NS", config)
+
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open, read_data='{"KML_NS": "https://custom.com", "BAN_WORDS": ["BLOCK"]}')
+    def test_load_config_reads_existing_file(self, mock_file, mock_exists):
+        """Тест: Корректное чтение существующего JSON файла"""
+        mock_exists.return_value = True
+
+        from mirror_1 import load_config
+        config = load_config()
+
+        self.assertEqual(config["KML_NS"], "https://custom.com")
+        self.assertEqual(config["BAN_WORDS"], ["BLOCK"])
+
+    @patch("os.path.exists")
+    @patch("builtins.open", new_callable=mock_open, read_data='{invalid_json: true}')
+    def test_load_config_invalid_json(self, mock_file, mock_exists):
+        """Тест: Поведение при битом JSON (например, синтаксическая ошибка)"""
+        mock_exists.return_value = True
+
+        from mirror_1 import load_config
+        # Если в функции нет обработки ошибок json.load, тест поймает JSONDecodeError
+        import json
+        with self.assertRaises(json.JSONDecodeError):
+            load_config()
 
 
 class TestKMLProcessor(unittest.TestCase):
@@ -42,6 +93,18 @@ class TestKMLProcessor(unittest.TestCase):
 ALTITUDES (FL) XXXXft AGL/FLXXX
 RESTRITA (TIME) XX:XX-XX:XX UTC</description>
                 </Placemark>
+                <Placemark>
+                    <name>LP-D11</name>
+                    <description>EUROCONTROL FUA
+ALTITUDES (FL) XXXXft AGL/FLXXX
+RESTRITA (TIME) XX:XX-XX:XX UTC</description>
+                </Placemark>
+            </Folder>
+            <Folder>
+                <name>AREAS LP-R</name>
+            </Folder>
+            <Folder>
+                <name>AREAS LP-TRA</name>
             </Folder>
         </Document>
         </kml>
@@ -49,7 +112,7 @@ RESTRITA (TIME) XX:XX-XX:XX UTC</description>
 
         # Данные для теста (нормализованное имя 'd10')
         self.regions_dict = {"d10": ["11:00-13:00|GND/FL240"]}
-        self.folders_to_copy = []
+        self.folders_to_copy = ["AREAS LP-R"]
 
     def test_kml_filtering_logic(self):
         # Используем BytesIO для имитации файла, чтобы lxml сам разобрался с namespaces
@@ -79,9 +142,12 @@ RESTRITA (TIME) XX:XX-XX:XX UTC</description>
         self.assertIn("11:00-13:00", result_xml)
         self.assertIn("GND/FL240", result_xml)
 
+        self.assertNotIn("LP-D11", result_xml)
+
+        self.assertNotIn("LP-TRA", result_xml)
+        self.assertIn("LP-R", result_xml)
 
 class TestFlightParser(unittest.TestCase):
-
     def setUp(self):
         # Имитируем кусок HTML-таблицы из проекта
         self.test_html = """
@@ -100,6 +166,13 @@ class TestFlightParser(unittest.TestCase):
                     <td>16:00</td>
                     <td>245</td>
                     <td>300</td>
+                </tr>
+                <tr>
+                    <td>LP-R15</td>
+                    <td>17:00</td>
+                    <td>19:00</td>
+                    <td>240</td>
+                    <td>305</td>
                 </tr>
                 <tr>
                     <td>TANCOS-LPR39A</td>
@@ -134,12 +207,13 @@ class TestFlightParser(unittest.TestCase):
 
             # 2. Проверяем конвертацию SFC -> GND и 050 -> 5000 ft
             # Ожидаем: "10:00 - 12:00 | GND/5000 ft AMSL"
-            self.assertEqual(result["d10"][0], "10:00-12:00|GND/FL50")
+            self.assertEqual(result["d10"][0], "10:00-12:00|GND/5000ft AMSL")
 
             # 3. Проверяем уровни FL (>= 245)
             # 245 -> FL245, 300 -> FL300
             self.assertIn("r15", result)
-            self.assertEqual(result["r15"][0], "14:00-16:00|FL245 AGL/FL300")
+            self.assertEqual(result["r15"][0], "14:00-16:00|FL245/FL300")
+            self.assertEqual(result["r15"][1], "17:00-19:00|FL240/FL305")
 
             # 4. Проверяем сложные названия
             # TANCOS-LPR39A -> r39a
@@ -153,6 +227,39 @@ class TestFlightParser(unittest.TestCase):
         """Проверяем, что при отсутствии файла выбрасывается ошибка"""
         with self.assertRaises(FileNotFoundError):
             parse_eaup_htm("absent_file.htm")
+
+    def test_parse_invalid_html_structure(self):
+        """Тест: что будет, если в HTML нет таблицы или не хватает колонок"""
+        # Сценарий 1: Таблицы вообще нет
+        bad_html = "<html><body><p>No data available</p></body></html>"
+        with patch("os.path.exists", return_value=True):
+            with patch("builtins.open", mock_open(read_data=bad_html)):
+                # Ожидаем, что функция вернет пустой словарь, а не ошибку IndexError
+                result = parse_eaup_htm(self.fake_path)
+                self.assertEqual(result, {}, "Должен вернуть пустой словарь при отсутствии таблицы")
+
+    def test_parse_unexpected_altitudes(self):
+        """Тест: обработка нестандартных значений высот (например, UNL или 999)"""
+        html_with_unl = """
+        <tr>
+            <td>LP-R50</td>
+            <td>08:00</td>
+            <td>10:00</td>
+            <td>SFC</td>
+            <td>UNL</td> 
+        </tr>
+        """
+        # Здесь мы проверяем, как ваша логика 'int(alt_max) >= 245'
+        # справится со строкой 'UNL' (может вызвать ValueError)
+        with patch("os.path.exists", return_value=True):
+            with patch("builtins.open", mock_open(read_data=html_with_unl)):
+                # Если функция упадет с ValueError — тест провален.
+                # Это подскажет вам добавить try/except внутрь parse_eaup_htm
+                try:
+                    result = parse_eaup_htm(self.fake_path)
+                    self.assertIn("r50", result)
+                except ValueError:
+                    self.fail("\033[31mUnexpected value \033[0m'UNL'")
 
 
 class TestTimeCalculation(unittest.TestCase):
