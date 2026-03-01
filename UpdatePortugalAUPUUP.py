@@ -214,7 +214,7 @@ if __name__ == "__main__":
         try:
             lp_regions = parse_eaup_htm(HTML_FILE)
         except FileNotFoundError:
-            print(f"File '{HTML_FILE}' didn't found, check the file name with database, it must be called '{HTML_FILE}'")
+            print(f"File '{HTML_FILE}' didn't found, check the file name with EU database, it must be called '{HTML_FILE}'")
             exit(1)
 
         if lp_regions:
