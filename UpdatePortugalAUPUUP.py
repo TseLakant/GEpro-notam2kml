@@ -1,19 +1,53 @@
 import os
-from lxml import etree
-from bs4 import BeautifulSoup
 import re
+import sys
+import traceback
+from datetime import datetime, timedelta, timezone
+
+import json
+
+from bs4 import BeautifulSoup
+from lxml import etree
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
-import time
 
 
-# --- ПАРАМЕТРЫ ---
-IS_ONLINE = True
-HTML_FILE = "AUP_UUP Details.htm"
-INPUT_KML = "Data Base.kml"
-OUTPUT_KML = "Active Regions.kml"
-KML_NS = 'http://www.opengis.net/kml/2.2' # Правильное пространство имен для GEpro KML 2.2
-FULL_COPY = ["SUPLEMENTOS ACTIVIDADES", "ESPAÇO AÉREO", "AERODROMOS E CAMPOS VOO"]  # Эти папки полетят в файл целиком
-TRACEBACK_FILE = "Traceback.txt"
+# --- ЗАГРУЗКА ПАРАМЕТРОВ ---
+CONFIG_FILE = "config.json"
+
+
+def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        # Если файла нет, создаем его с дефолтными значениями
+        default_config = {
+            "IS_ONLINE": True,
+            "HTML_FILE": "AUP_UUP Details.htm",
+            "INPUT_KML": "Data Base.kml",
+            "OUTPUT_KML": "Active Regions.kml",
+            "KML_NS": "http://www.opengis.net/kml/2.2",
+            "FULL_COPY": ["ALWAYS ON - NOT CHANGE AREAS LP-R (ALWAYS THE SAME)", "ALWAYS ON - DAILY NOTAM UPDATES AREAS (AS IN DAILY EMAIL AT 05H00)", "ALWAYS ON - NOT CHANGE AIRSPACE 2026 (ALWAYS THE SAME)"],
+            "TRACEBACK_FILE": "Traceback.txt",
+            "BAN_WORDS": ["lp-", "lp", "area", "fall", "land", "tancos", "-"]
+        }
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(default_config, f, indent=4, ensure_ascii=False)
+        return default_config
+
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+config = load_config()
+
+# Теперь используем переменные из словаря config
+IS_ONLINE = config["IS_ONLINE"]
+HTML_FILE = config["HTML_FILE"]
+INPUT_KML = config["INPUT_KML"]
+OUTPUT_KML = config["OUTPUT_KML"]
+KML_NS = config["KML_NS"]
+FULL_COPY = config["FULL_COPY"]
+TRACEBACK_FILE = config["TRACEBACK_FILE"]
+BAN_WORDS = config["BAN_WORDS"]
 
 
 def download_page():
@@ -26,12 +60,12 @@ def download_page():
 
         # Перебираем возможные варианты времени, что бы перейти по ссылке, (каждая попытка +- 2 сек)
         flag = False
-        cur_time = time.gmtime()
-        cur_date = '/'.join([str(cur_time.tm_mday + 100)[1:3], str(cur_time.tm_mon + 100)[1:3], str(cur_time.tm_year)])
-        cur_hour = cur_time.tm_hour
-        for trying_time in range(cur_hour*2):
-            cur_time = ':'.join([str(cur_hour - trying_time // 2 + 100)[1:3], ['30', '00'][trying_time % 2]])
-            need_page = cur_date + " " + cur_time
+        now_utc = datetime.now(timezone.utc)
+        floored_minute = (now_utc.minute // 30) * 30
+        start_time = now_utc.replace(minute=floored_minute, second=0, microsecond=0)
+        for trying_time in range(49):
+            candidate_time = start_time - timedelta(minutes=30 * trying_time)
+            need_page = candidate_time.strftime('%d/%m/%Y %H:%M')
             try:
                 # Ожидаем появление новой вкладки (page) после клика
                 with context.expect_page() as new_page_info:
@@ -40,13 +74,14 @@ def download_page():
                     print(f"⬇️Downloading EU table: {need_page}")
                     flag = True
                     break
-            except Exception as e:
+            except PlaywrightTimeoutError:
                 print(f"❌Dont have EU table: '{need_page}'")
 
         if not flag:
-            print("\n\033[31mError\033[0m, sorry program didn't found EU table\nplease restart the program")
-            input('press enter to exit program...')
-            exit(0)
+            raise RuntimeError(
+                "Failed to find a downloadable EU table for the last 24 hours. "
+                "The page format or availability may have changed."
+            )
         # Это и есть та самая страница, которая открылась
         target_page = new_page_info.value
 
@@ -106,11 +141,14 @@ def process_ge_pro_kml(input_path, output_path, folders_to_copy, regions_dict):
                 if name_node is not None and name_node.text:
                     kml_name = name_node.text.strip()
                     # Нормализация имени KML для сравнения со словарем: LP-D10 -> d10
-                    ban_words = ['lp-', 'lp', 'area', 'fall', 'land']
                     pm_name_normalized = kml_name.lower()
-                    for ban in ban_words:
+                    for ban in BAN_WORDS:
                         pm_name_normalized = pm_name_normalized.replace(ban, '')
-                    pm_name_normalized = pm_name_normalized.strip().split()[0]
+                    normalized_parts = pm_name_normalized.strip().split()
+                    if not normalized_parts:
+                        folder.remove(pm)
+                        continue
+                    pm_name_normalized = normalized_parts[0]
 
                     if pm_name_normalized in regions_dict:
                         # подсчитывает кол-во оставшихся регионов
@@ -122,13 +160,21 @@ def process_ge_pro_kml(input_path, output_path, folders_to_copy, regions_dict):
                         # 1. Обновляем описание (используя исправленный синтаксис)
                         data_list = regions_dict[pm_name_normalized]
                         description_html = "\n".join(data_list)
+                        altitudes = ', '.join([i.split('|')[1] for i in data_list])
+                        active_time = ', '.join([i.split('|')[0] for i in data_list])
 
                         desc_node = pm.find('{{{}}}description'.format(KML_NS))
                         if desc_node is None:
                             # Если description нет, создаем новый элемент с правильным NS
                             desc_node = etree.SubElement(pm, '{{{}}}description'.format(KML_NS))
                         else:
-                            description_html = description_html + '\n \n' + str(desc_node.text)
+                            if str(desc_node.text).find('XXXXft AGL/FLXXX') == -1 or str(desc_node.text).find('XX:XX-XX:XX') == -1:
+                                print(f'''\033[31mERROR. please check the format of the description {pm_name_normalized}\033[0m
+altitude must have XXXXft AGL/FLXXX
+time must have XX:XX-XX:XX''')
+                                sys.exit(1)
+                            description_html = str(desc_node.text).replace('XXXXft AGL/FLXXX', altitudes)
+                            description_html = description_html.replace('XX:XX-XX:XX', active_time)
                         desc_node.text = etree.CDATA(description_html)
 
                         # 2. Принудительный инлайновый красный стиль
@@ -152,6 +198,8 @@ def process_ge_pro_kml(input_path, output_path, folders_to_copy, regions_dict):
                     else:
                         folder.remove(pm)
             print(f'\tNumber of processed placemarks: {sorted_pm_count}')
+            if sorted_pm_count == 0:
+                document.remove(folder)
 
     # Сохранение с корректным объявлением XML для Google Earth
     with open(output_path, 'wb') as f:
@@ -162,7 +210,8 @@ def process_ge_pro_kml(input_path, output_path, folders_to_copy, regions_dict):
 
 def parse_eaup_htm(file_path):
     # (Ваша функция parse_eaup_html остается без изменений)
-    if not os.path.exists(file_path): return {}
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(file_path)
     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
         soup = BeautifulSoup(f, 'html.parser')
     rows = soup.find_all('tr')
@@ -172,32 +221,36 @@ def parse_eaup_htm(file_path):
     for row in rows:
         cells = row.find_all(['td', 'th'])
         row_text = "|".join([c.get_text(strip=True) for c in cells if c.get_text(strip=True)])
-        name_match = re.search(r'\b(LP\w+)\b', row_text)
+        name_match = re.search(r'\b(LP(?:-?[A-Z0-9]+)+)\b', row_text, flags=re.IGNORECASE)
         if name_match:
-            region_name = name_match.group(1)
+            region_name = name_match.group(1).upper()
             if region_name == "LPA": continue
             times = re.findall(r'\d{2}:\d{2}', row_text)
             if len(times) > 4 or len(times) < 2: continue
-            time_str = " - ".join(times[:2])
-            raw_levels = re.findall(r'\b(\d{3})\b|SFC', row_text)
+            time_str = "-".join(times[:2])
+            raw_levels = re.findall(r'\b(?:\d{3}|SFC)\b', row_text, flags=re.IGNORECASE)
             altitudes = []
-            for lvl in raw_levels:
-                val = lvl if isinstance(lvl, tuple) and lvl else (lvl if isinstance(lvl, tuple) else lvl)
-                if not val: continue
-                if val.upper() == 'SFC' or val.isdigit() and int(val) == 0:
-                    val = 'GND'
-                elif val.isdigit() and int(val) < 245:
-                    val = f"{int(val) * 100} ft"
-                elif val.isdigit() and int(val) >= 245:
-                    val = f'FL{val}'
+            for val in raw_levels:
+                val = val.upper()
+                if val == 'SFC' or val == 'GND':
+                    val = 0
+                elif not val.isdigit():
+                    raise ValueError(f"""\033[31mUnexpected value \033[0m'{val}'""")
+                else:
+                    val = int(val)
                 altitudes.append(val)
             clean_alts = altitudes[:2]
-            alt_display = '/'.join(clean_alts) if clean_alts else "\033[31mNot specified\033[0m"
+            if len(clean_alts) != 2:
+                clean_alts = ['Not specified', 'Not specified']
+            else:
+                clean_alts[0] = f"{'FL' if clean_alts[0] > 55 else ''}{'GND' if clean_alts[0] == 0 else int(clean_alts[0] * (100 if clean_alts[0] <= 55 else 1))}{'ft' if clean_alts[0] <= 55 and clean_alts[0] != 0 else ''}{' AGL' if clean_alts[0] != 0 and clean_alts[0] <= 55 else ""}"
+                clean_alts[1] = f"{'FL' if clean_alts[1] > 55 else ''}{int(clean_alts[1] * (100 if clean_alts[1] <= 55 else 1))}{'ft' if clean_alts[1] <= 55 else ''}{' AMSL' if clean_alts[1] <= 55 else ""}"
+            alt_display = f"{clean_alts[0]}/{clean_alts[1]}"
             record_key = f"{region_name}|{time_str}|{alt_display}"
             if record_key not in seen_records:
                 seen_records.add(record_key)
                 clean_region_name = region_name[2:].lower().replace('-', '').strip()
-                time_alt_string = f"{time_str} | {alt_display} AMSL"
+                time_alt_string = f"{time_str}|{alt_display}"
                 print('', clean_region_name+' ', time_alt_string, sep='\t')
                 if clean_region_name in parsed_lp_regions:
                     parsed_lp_regions[clean_region_name].append(time_alt_string)
@@ -214,7 +267,7 @@ if __name__ == "__main__":
         try:
             lp_regions = parse_eaup_htm(HTML_FILE)
         except FileNotFoundError:
-            print(f"File '{HTML_FILE}' didn't found, check the file name with EU database, it must be called '{HTML_FILE}'")
+            print(f"File '{HTML_FILE}' didn't found, check the file name with database, it must be called '{HTML_FILE}'")
             exit(1)
 
         if lp_regions:
@@ -224,11 +277,15 @@ if __name__ == "__main__":
         else:
             print("\033[31mRegions for update didn't found, KML didn't created, try later")
         print("\n\033[32mProcess finished\033[0m, without errors.")
-    except Exception as e:
-        print(f"\n\033[31mAn unexpected error occurred\033[0m, wrote in file '{TRACEBACK_FILE}'")
+    except Exception:
+        tb = traceback.format_exc()
+        print(f"\n\033[31mAn unexpected error occurred\033[0m. Traceback written to '{TRACEBACK_FILE}'.")
         with open(TRACEBACK_FILE, 'w', encoding='utf-8') as f:
-            f.write(str(e))
+            f.write(tb)
+        print(tb, file=sys.stderr)
+        sys.exit(1)
     finally:
         # Записываю в переменную enter, чтобы избавиться от бага с необходимостью дважды нажимать enter
-        press = input("\nPress enter to exit...")
+        if sys.stdin.isatty():
+            input("\nPress enter to exit...")
 
