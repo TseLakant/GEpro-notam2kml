@@ -1,0 +1,10 @@
+{
+    "IS_ONLINE": false,
+    "HTML_FILE": "AUP_UUP Details.htm",
+    "INPUT_KML": "Data Base.kml",
+    "OUTPUT_KML": "Active Regions.kml",
+    "KML_NS": "http://www.opengis.net/kml/2.2",
+    "FULL_COPY": ["ALWAYS ON - NOT CHANGE AREAS LP-R (ALWAYS THE SAME)", "ALWAYS ON - DAILY NOTAM UPDATES AREAS (AS IN DAILY EMAIL AT 05H00)", "ALWAYS ON - NOT CHANGE AIRSPACE 2026 (ALWAYS THE SAME)"],
+    "TRACEBACK_FILE": "Traceback.txt",
+    "BAN_WORDS": ["lp-", "lp", "area", "fall", "land", "tancos", "-"]
+}
