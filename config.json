@@ -1,5 +1,5 @@
 {
-    "IS_ONLINE": false,
+    "IS_ONLINE": true,
     "HTML_FILE": "AUP_UUP Details.htm",
     "INPUT_KML": "Data Base.kml",
     "OUTPUT_KML": "Active Regions.kml",
