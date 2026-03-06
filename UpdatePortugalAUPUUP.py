@@ -215,6 +215,14 @@ def parse_eaup_htm(file_path):
     rows = soup.find_all('tr')
     seen_records = set()
     parsed_lp_regions = dict()
+
+    def format_altitude(level):
+        if level == 0:
+            return 'GND'
+        if level < 50:
+            return f"{level * 100}ft AGL"
+        return f"FL{level}"
+
     print('🔍Founded regions:')
     for row in rows:
         cells = row.find_all(['td', 'th'])
@@ -236,7 +244,12 @@ def parse_eaup_htm(file_path):
                     val = int(val)
                 altitudes.append(val)
             clean_alts = altitudes[:2]
-            alt_display = f"{'FL' if clean_alts[0] >= 50 else ''}{'GND' if clean_alts[0] == 0 else int(clean_alts[0] * (100 if clean_alts[0] < 50 else 1))}{'ft' if clean_alts[0] < 50 and clean_alts[0] != 0 else ''}{' AGL' if clean_alts[0] != 0 else ""}/FL{clean_alts[1]}" if clean_alts else "\033[31mNot specified\033[0m"
+            if not clean_alts:
+                alt_display = "\033[31mNot specified\033[0m"
+            elif len(clean_alts) == 1:
+                alt_display = format_altitude(clean_alts[0])
+            else:
+                alt_display = f"{format_altitude(clean_alts[0])}/{format_altitude(clean_alts[1])}"
             record_key = f"{region_name}|{time_str}|{alt_display}"
             if record_key not in seen_records:
                 seen_records.add(record_key)
