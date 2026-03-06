@@ -216,11 +216,11 @@ def parse_eaup_htm(file_path):
     seen_records = set()
     parsed_lp_regions = dict()
 
-    def format_altitude(level):
+    def format_altitude(level, type):
         if level == 0:
             return 'GND'
-        if level < 50:
-            return f"{level * 100}ft AGL"
+        if level < 55:
+            return f"{level * 100}ft {["AGL", "AMSL"][type]}"
         return f"FL{level}"
 
     print('🔍Founded regions:')
@@ -247,9 +247,9 @@ def parse_eaup_htm(file_path):
             if not clean_alts:
                 alt_display = "\033[31mNot specified\033[0m"
             elif len(clean_alts) == 1:
-                alt_display = format_altitude(clean_alts[0])
+                alt_display = format_altitude(clean_alts[0], 1)
             else:
-                alt_display = f"{format_altitude(clean_alts[0])}/{format_altitude(clean_alts[1])}"
+                alt_display = f"{format_altitude(clean_alts[0], 0)}/{format_altitude(clean_alts[1], 1)}"
             record_key = f"{region_name}|{time_str}|{alt_display}"
             if record_key not in seen_records:
                 seen_records.add(record_key)
