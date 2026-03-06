@@ -198,8 +198,6 @@ time must have XX:XX-XX:XX''')
                     else:
                         folder.remove(pm)
             print(f'\tNumber of processed placemarks: {sorted_pm_count}')
-            if sorted_pm_count == 0:
-                document.remove(folder)
 
     # Сохранение с корректным объявлением XML для Google Earth
     with open(output_path, 'wb') as f:
@@ -217,6 +215,14 @@ def parse_eaup_htm(file_path):
     rows = soup.find_all('tr')
     seen_records = set()
     parsed_lp_regions = dict()
+
+    def format_altitude(level):
+        if level == 0:
+            return 'GND'
+        if level < 50:
+            return f"{level * 100}ft AGL"
+        return f"FL{level}"
+
     print('🔍Founded regions:')
     for row in rows:
         cells = row.find_all(['td', 'th'])
@@ -234,18 +240,16 @@ def parse_eaup_htm(file_path):
                 val = val.upper()
                 if val == 'SFC' or val == 'GND':
                     val = 0
-                elif not val.isdigit():
-                    raise ValueError(f"""\033[31mUnexpected value \033[0m'{val}'""")
                 else:
                     val = int(val)
                 altitudes.append(val)
             clean_alts = altitudes[:2]
-            if len(clean_alts) != 2:
-                clean_alts = ['Not specified', 'Not specified']
+            if not clean_alts:
+                alt_display = "\033[31mNot specified\033[0m"
+            elif len(clean_alts) == 1:
+                alt_display = format_altitude(clean_alts[0])
             else:
-                clean_alts[0] = f"{'FL' if clean_alts[0] > 55 else ''}{'GND' if clean_alts[0] == 0 else int(clean_alts[0] * (100 if clean_alts[0] <= 55 else 1))}{'ft' if clean_alts[0] <= 55 and clean_alts[0] != 0 else ''}{' AGL' if clean_alts[0] != 0 and clean_alts[0] <= 55 else ""}"
-                clean_alts[1] = f"{'FL' if clean_alts[1] > 55 else ''}{int(clean_alts[1] * (100 if clean_alts[1] <= 55 else 1))}{'ft' if clean_alts[1] <= 55 else ''}{' AMSL' if clean_alts[1] <= 55 else ""}"
-            alt_display = f"{clean_alts[0]}/{clean_alts[1]}"
+                alt_display = f"{format_altitude(clean_alts[0])}/{format_altitude(clean_alts[1])}"
             record_key = f"{region_name}|{time_str}|{alt_display}"
             if record_key not in seen_records:
                 seen_records.add(record_key)
