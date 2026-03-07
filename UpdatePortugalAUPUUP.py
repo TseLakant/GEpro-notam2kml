@@ -219,7 +219,7 @@ def parse_eaup_htm(file_path):
     def format_altitude(level, type):
         if level == 0:
             return 'GND'
-        if level < 55:
+        if level < 50:
             return f"{level * 100}ft {["AGL", "AMSL"][type]}"
         return f"FL{level}"
 
